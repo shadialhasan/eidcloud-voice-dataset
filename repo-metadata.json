@@ -1,0 +1,12 @@
+{
+  "description": "Automated voice dataset factory for Speech AI with VAD silence trimming, loudness normalization, and LJSpeech metadata generation",
+  "topics": [
+    "eidcloud",
+    "speech-ai",
+    "voice-dataset",
+    "tts-dataset",
+    "audio-processing",
+    "ljspeech-format",
+    "php8"
+  ]
+}

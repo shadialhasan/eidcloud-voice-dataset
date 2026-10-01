@@ -1,0 +1,36 @@
+{
+  "name": "eidcloud/voice-dataset",
+  "description": "Automated voice dataset factory for Speech AI with VAD silence trimming, loudness normalization, and LJSpeech metadata generation",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Eng. MHD. Shadi AL-Hasan",
+      "email": "shadi@eidcloud.com",
+      "homepage": "https://github.com/shadi-alhasan"
+    }
+  ],
+  "require": {
+    "php": ">=8.2.0"
+  },
+  "require-dev": {},
+  "autoload": {
+    "psr-4": {
+      "EidCloud\\VoiceDataset\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "EidCloud\\VoiceDataset\\Tests\\": "tests/"
+    }
+  },
+  "bin": [
+    "bin/eidcloud-voice"
+  ],
+  "scripts": {
+    "test": "php tests/run_tests.php"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}

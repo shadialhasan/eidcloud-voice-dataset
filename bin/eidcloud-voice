@@ -1,0 +1,204 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+if (file_exists(__DIR__ . '/../vendor/autoload.php')) {
+    require_once __DIR__ . '/../vendor/autoload.php';
+} else {
+    require_once __DIR__ . '/../autoload.php';
+}
+
+use EidCloud\VoiceDataset\DatasetFactory;
+
+const VERSION = '1.0.0';
+
+function printHelp(): void
+{
+    $version = VERSION;
+    echo <<<HELP
+🎙️ eidcloud-voice dataset factory v{$version}
+Automated Voice Dataset Factory for Speech AI, TTS (XTTS/Bark), and ASR models.
+
+USAGE:
+  php bin/eidcloud-voice <command> [options]
+
+COMMANDS:
+  build <raw_audio_dir>    Process, trim, normalize, and segment raw audio into an LJSpeech dataset
+  audit <dataset_dir>      Audit a dataset directory for clipping, SNR, format compliance & hum
+  version                  Display current version
+
+OPTIONS:
+  --output=<dir>           Output directory for the processed dataset (default: ./dataset/)
+  --transcripts=<file>     Optional JSON or CSV file containing transcripts (format: filename -> text)
+  --lufs=<float>           Target integrated loudness LUFS (default: -23.0 for EBU R128, -16.0 for podcast)
+  --min-sec=<float>        Minimum segment length in seconds (default: 2.0)
+  --max-sec=<float>        Maximum segment length in seconds (default: 12.0)
+  --min-snr=<float>        Minimum Signal-to-Noise Ratio (SNR) in dB (default: 15.0)
+  --train-ratio=<float>    Fraction of data allocated to train.csv vs val.csv (default: 0.90)
+  --strict                 Fail audit if any warnings or sub-threshold SNR issues exist
+  --json                   Output machine-readable JSON for automated ML pipelines
+  -h, --help               Show this help message
+  -v, --version            Display version information
+
+EXAMPLES:
+  php bin/eidcloud-voice build ./raw_audio/ --output=./dataset/
+  php bin/eidcloud-voice build ./raw_audio/ --output=./dataset/ --lufs=-16.0 --json
+  php bin/eidcloud-voice audit ./dataset/ --strict
+  php bin/eidcloud-voice audit ./dataset/ --json
+
+HELP;
+}
+
+$args = array_slice($argv, 1);
+
+if (empty($args) || in_array('-h', $args, true) || in_array('--help', $args, true)) {
+    printHelp();
+    exit(0);
+}
+
+if (in_array('-v', $args, true) || in_array('--version', $args, true) || ($args[0] ?? '') === 'version') {
+    echo "eidcloud-voice-dataset v" . VERSION . PHP_EOL;
+    exit(0);
+}
+
+$command = $args[0];
+$isJson = in_array('--json', $args, true);
+$isStrict = in_array('--strict', $args, true);
+
+// Parse named options
+$options = [];
+$positional = [];
+
+for ($i = 1; $i < count($args); $i++) {
+    $arg = $args[$i];
+    if (str_starts_with($arg, '--')) {
+        $parts = explode('=', substr($arg, 2), 2);
+        $options[$parts[0]] = $parts[1] ?? true;
+    } else {
+        $positional[] = $arg;
+    }
+}
+
+try {
+    switch ($command) {
+        case 'build':
+            $inputDir = $positional[0] ?? null;
+            if (!$inputDir) {
+                fwrite(STDERR, "Error: missing required argument <raw_audio_dir>\n");
+                printHelp();
+                exit(1);
+            }
+
+            $outputDir = (string)($options['output'] ?? './dataset/');
+            $targetLufs = isset($options['lufs']) ? (float)$options['lufs'] : -23.0;
+            $minSec = isset($options['min-sec']) ? (float)$options['min-sec'] : 2.0;
+            $maxSec = isset($options['max-sec']) ? (float)$options['max-sec'] : 12.0;
+            $minSnr = isset($options['min-snr']) ? (float)$options['min-snr'] : 15.0;
+            $trainRatio = isset($options['train-ratio']) ? (float)$options['train-ratio'] : 0.90;
+
+            // Load transcripts if specified
+            $transcripts = [];
+            if (isset($options['transcripts']) && is_string($options['transcripts']) && file_exists($options['transcripts'])) {
+                $content = file_get_contents($options['transcripts']);
+                $decoded = json_decode($content, true);
+                if (is_array($decoded)) {
+                    $transcripts = $decoded;
+                }
+            }
+
+            $factory = new DatasetFactory([
+                'target_lufs' => $targetLufs,
+                'min_segment_sec' => $minSec,
+                'max_segment_sec' => $maxSec,
+                'min_snr_db' => $minSnr,
+                'train_ratio' => $trainRatio,
+            ]);
+
+            if (!$isJson) {
+                echo "🚀 Starting Voice Dataset Factory...\n";
+                echo "   Input:       {$inputDir}\n";
+                echo "   Output:      {$outputDir}\n";
+                echo "   Target LUFS: {$targetLufs} LUFS\n";
+                echo "   Segment:     {$minSec}s - {$maxSec}s\n";
+                echo "   Min SNR:     {$minSnr} dB\n\n";
+            }
+
+            $result = $factory->build(
+                rawAudioDir: $inputDir,
+                outputDir: $outputDir,
+                transcripts: $transcripts,
+                progressCallback: $isJson ? null : function (string $event, array $data) {
+                    if ($event === 'file_start') {
+                        echo "  → Processing " . basename($data['file']) . "... \n";
+                    } elseif ($event === 'file_rejected') {
+                        echo "    ⚠️ File rejected: " . implode(', ', $data['reason']) . "\n";
+                    }
+                }
+            );
+
+            if ($isJson) {
+                echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
+            } else {
+                echo "\n✅ Dataset build completed successfully!\n";
+                echo "   Total segments created: {$result['summary']['total_segments']}\n";
+                echo "   Training samples:       {$result['summary']['train_count']}\n";
+                echo "   Validation samples:     {$result['summary']['val_count']}\n";
+                echo "   Total audio duration:   {$result['summary']['total_duration_sec']} sec\n";
+                echo "   Metadata exported to:   {$result['summary']['metadata_path']}\n";
+                echo "   Stats JSON:             {$result['summary']['stats_path']}\n";
+            }
+            exit(0);
+
+        case 'audit':
+            $datasetDir = $positional[0] ?? null;
+            if (!$datasetDir) {
+                fwrite(STDERR, "Error: missing required argument <dataset_dir>\n");
+                printHelp();
+                exit(1);
+            }
+
+            $factory = new DatasetFactory();
+            $auditResult = $factory->audit($datasetDir, $isStrict);
+
+            if ($isJson) {
+                echo json_encode($auditResult, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;
+            } else {
+                echo "🔍 Auditing dataset directory: {$datasetDir}\n";
+                echo "   Strict Mode: " . ($isStrict ? 'ENABLED' : 'DISABLED') . "\n";
+                echo "   Total files analyzed: {$auditResult['stats']['total_files']}\n";
+                echo "   Compliant files:      {$auditResult['stats']['compliant_files']}\n";
+                echo "   Failed files:         {$auditResult['stats']['failed_files']}\n";
+                echo "   Average SNR:          {$auditResult['stats']['average_snr_db']} dB\n";
+                echo "   Clipping incidents:   {$auditResult['stats']['clipping_incidents']}\n";
+                echo "   Hum incidents:        {$auditResult['stats']['hum_incidents']}\n";
+
+                if (!empty($auditResult['issues'])) {
+                    echo "\n⚠️ Identified Issues:\n";
+                    foreach ($auditResult['issues'] as $issue) {
+                        echo "   - {$issue}\n";
+                    }
+                }
+
+                if ($auditResult['passed']) {
+                    echo "\n✅ Audit PASSED: Dataset satisfies quality requirements.\n";
+                } else {
+                    echo "\n❌ Audit FAILED: Deficiencies detected.\n";
+                }
+            }
+
+            exit($auditResult['passed'] ? 0 : 1);
+
+        default:
+            fwrite(STDERR, "Unknown command: {$command}\n");
+            printHelp();
+            exit(1);
+    }
+} catch (\Throwable $e) {
+    if ($isJson) {
+        echo json_encode(['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()], JSON_PRETTY_PRINT) . PHP_EOL;
+    } else {
+        fwrite(STDERR, "\n💥 FATAL ERROR: " . $e->getMessage() . PHP_EOL);
+    }
+    exit(1);
+}
